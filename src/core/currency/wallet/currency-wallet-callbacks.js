@@ -5,6 +5,7 @@ import { emit } from 'yaob'
 
 import {
   type EdgeCurrencyEngineCallbacks,
+  type EdgeCurrencyWallet,
   type EdgeTransaction
 } from '../../../types/types.js'
 import { compare } from '../../../util/compare.js'
@@ -20,6 +21,7 @@ import {
   type CurrencyWalletProps
 } from './currency-wallet-pixie.js'
 import { mergeTx } from './currency-wallet-reducer.js'
+import { getFioWallets } from '../../login/keys'
 
 let throttleRateLimitMs = 5000
 
@@ -201,13 +203,57 @@ export function makeCurrencyWalletCallbacks(
         txidHashes[txidHash] = combinedTx.date
       }
 
-      // Tell everyone who cares:
-      input.props.dispatch({
-        type: 'CURRENCY_ENGINE_CHANGED_TXS',
-        payload: { txs, walletId, txidHashes }
+      // todo: check if all wallets are loaded
+      // if (Object.keys(input.selfOutput.currencyWallets).length !== input.selfInput.activeWalletIds.length) {
+      //   setTimeout(() => {
+      //     // call
+      //   }, 400)
+      //   return
+      // }
+      const getFioObtData = async (fioWallets: EdgeCurrencyWallet[], txs: EdgeTransaction[]) => {
+        if (!txs.length || !fioWallets.length) return
+        const leftOver: EdgeTransaction[] = []
+        const fioWallet = fioWallets.pop()
+        let obtDataRecords
+        try {
+          const { obt_data_records } = await fioWallet.otherMethods.fioAction('getObtData', {})
+          obtDataRecords = obt_data_records
+        } catch (e) {
+          console.log(e)
+          return getFioObtData(fioWallets, txs)
+        }
+        while (txs.length) {
+          const transaction = txs.pop()
+          const obtForTx: FioObtRecord | void = obtDataRecords.find(obtRecord => obtRecord.content.obt_id === transaction.txid)
+
+          if (!obtForTx) {
+            leftOver.push(transaction)
+            continue
+          }
+
+          const edgeMetadata: EdgeMetadata = transaction.metadata ? { ...transaction.metadata } : { notes: '' }
+          if (!edgeMetadata.notes) edgeMetadata.notes = ''
+          let fioNotes = `${s.strings.fragment_transaction_list_sent_prefix}${s.strings.word_to_in_convert_from_to_string} ${obtForTx.payee_fio_address}`
+          if (obtForTx.content.memo) fioNotes += `\n${s.strings.fio_sender_memo_label}: ${obtForTx.content.memo}`
+          edgeMetadata.notes = `${fioNotes}\n${edgeMetadata.notes || ''}`
+          edgeMetadata.name = obtForTx.payer_fio_address
+          const wallet = input.selfOutput.api
+          wallet.saveTxMetadata(transaction.txid, transaction.currencyCode, edgeMetadata)
+          transaction.metadata = edgeMetadata
+        }
+        return getFioObtData(fioWallets, leftOver)
+      }
+
+      const fioWallets = getFioWallets(input.selfOutput)
+      getFioObtData(fioWallets, [ ...created ]).then(() => {
+        // Tell everyone who cares:
+        input.props.dispatch({
+          type: 'CURRENCY_ENGINE_CHANGED_TXS',
+          payload: { txs, walletId, txidHashes }
+        })
+        if (changed.length) throtteldOnTxChanged(changed)
+        if (created.length) throttledOnNewTx(created)
       })
-      if (changed.length) throtteldOnTxChanged(changed)
-      if (created.length) throttledOnNewTx(created)
     },
     onAddressChanged() {
       emit(input.props.selfOutput.api, 'addressChanged')

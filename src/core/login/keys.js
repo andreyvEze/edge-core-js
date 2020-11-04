@@ -19,6 +19,8 @@ import { applyKit } from '../login/login.js'
 import { getCurrencyTools } from '../plugins/plugins-selectors.js'
 import { type ApiInput } from '../root-pixie.js'
 import { type AppIdMap, type LoginKit, type LoginTree } from './login-types.js'
+import type { RootState } from '../root-reducer'
+import type { AccountOutput } from '../account/account-pixie'
 
 /**
  * Returns the first keyInfo with a matching type.
@@ -487,4 +489,17 @@ export async function listSplittableWalletTypes(
       existingWalletInfo.deleted
     )
   })
+}
+
+export function getFioWallets(
+  selfOutput: AccountOutput
+): Promise<string[]> {
+  const { currencyWallets } = selfOutput
+  const fioWallets = []
+  for (const currencyWalletKey in currencyWallets) {
+    if (currencyWallets[currencyWalletKey].currencyInfo.currencyCode === 'FIO') {
+      fioWallets.push(currencyWallets[currencyWalletKey])
+    }
+  }
+  return fioWallets
 }
